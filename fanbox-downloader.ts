@@ -1,7 +1,7 @@
 import { DownloadHelper, DownloadObject, DownloadUtils } from 'download-helper';
 
 /** API呼び出し間隔（ミリ秒） - レート制限回避用 */
-const API_DELAY_MS = 1000;
+const API_DELAY_MS = 200;
 
 /**
  * ダウンローダーの管理クラス
