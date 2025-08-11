@@ -1,4 +1,7 @@
-import { DownloadHelper, DownloadObject, DownloadUtils } from 'download-helper/download-helper';
+import { DownloadHelper, DownloadObject, DownloadUtils } from 'download-helper';
+
+/** API呼び出し間隔（ミリ秒） - レート制限回避用 */
+const API_DELAY_MS = 1000;
 
 /**
  * ダウンローダーの管理クラス
@@ -128,6 +131,7 @@ async function searchBy(
 		alert('しらないURL');
 		return;
 	}
+	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const plans = DownloadManage.utils.httpGetAs<Plans>(
 		`https://api.fanbox.cc/plan.listCreator?creatorId=${creatorId}`,
 	).body;
@@ -135,12 +139,13 @@ async function searchBy(
 	plans?.forEach((plan) => feeMapper.set(plan.fee, plan.title));
 	const downloadSettings = new DownloadManage(creatorId, feeMapper);
 	downloadSettings.downloadObject.setUrl(`https://www.fanbox.cc/@${creatorId}`);
+	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const definedTags =
 		DownloadManage.utils
 			.httpGetAs<Tags>(`https://api.fanbox.cc/tag.getFeatured?creatorId=${creatorId}`)
 			.body?.map((tag) => tag.tag) ?? [];
 	downloadSettings.addTags(...definedTags);
-	if (postId) addByPostInfo(downloadSettings, getPostInfoById(postId));
+	if (postId) addByPostInfo(downloadSettings, await getPostInfoById(postId));
 	else await getItemsById(downloadSettings);
 	downloadSettings.applyTags();
 	return downloadSettings.downloadObject;
@@ -160,13 +165,14 @@ async function getItemsById(downloadManage: DownloadManage) {
 			downloadManage.setLimit(limit);
 		}
 	}
+	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const urls = DownloadManage.utils.httpGetAs<{ body: string[] }>(
 		`https://api.fanbox.cc/post.paginateCreator?creatorId=${downloadManage.userId}`,
 	).body;
 	for (let i = 0; i < urls.length; i++) {
 		console.log(`${i + 1}回目`);
 		await addByPostListUrl(downloadManage, urls[i]);
-		await DownloadManage.utils.sleep(10);
+		await DownloadManage.utils.sleep(API_DELAY_MS);
 	}
 }
 
@@ -176,6 +182,7 @@ async function getItemsById(downloadManage: DownloadManage) {
  * @param url
  */
 async function addByPostListUrl(downloadManage: DownloadManage, url: string): Promise<void> {
+	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const postList = DownloadManage.utils.httpGetAs<{ body: PostInfo[] }>(url).body;
 	console.log(`投稿の数:${postList.length}`);
 	for (const post of postList) {
@@ -183,8 +190,8 @@ async function addByPostListUrl(downloadManage: DownloadManage, url: string): Pr
 			if (post.body) {
 				addByPostInfo(downloadManage, post);
 			} else if (!post.isRestricted) {
-				await DownloadManage.utils.sleep(10);
-				addByPostInfo(downloadManage, getPostInfoById(post.id));
+				await DownloadManage.utils.sleep(API_DELAY_MS);
+				addByPostInfo(downloadManage, await getPostInfoById(post.id));
 			}
 		} else break;
 	}
@@ -194,7 +201,8 @@ async function addByPostListUrl(downloadManage: DownloadManage, url: string): Pr
  * 投稿IDからpostInfoを得る
  * @param postId 投稿ID
  */
-function getPostInfoById(postId: string): PostInfo | undefined {
+async function getPostInfoById(postId: string): Promise<PostInfo | undefined> {
+	await DownloadManage.utils.sleep(API_DELAY_MS);
 	return DownloadManage.utils.httpGetAs<{ body?: PostInfo }>(
 		`https://api.fanbox.cc/post.info?postId=${postId}`,
 	).body;
