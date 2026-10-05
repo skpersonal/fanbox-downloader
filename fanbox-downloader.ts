@@ -3,6 +3,12 @@ import { DownloadHelper, DownloadObject, DownloadUtils } from 'download-helper';
 /** API呼び出し間隔（ミリ秒） - レート制限回避用 */
 const API_DELAY_MS = 200;
 
+/** 429(レート制限)時の最大リトライ回数 */
+const RETRY_MAX = 5;
+
+/** 429(レート制限)時の初回待機時間（ミリ秒） 以降2倍ずつ増える */
+const RETRY_BASE_DELAY_MS = 60000;
+
 /**
  * ダウンローダーの管理クラス
  */
@@ -134,8 +140,10 @@ async function searchBy(
 	await DownloadManage.utils.sleep(API_DELAY_MS);
 	// 2026/10頃のAPI変更で body が { plans: [...] } 形式になったため両対応
 	const plans = unwrap<NonNullable<Plans['body']>>(
-		DownloadManage.utils.httpGetAs<{ body?: unknown }>(
-			`https://api.fanbox.cc/plan.listCreator?creatorId=${creatorId}`,
+		(
+			await httpGetWithRetry<{ body?: unknown }>(
+				`https://api.fanbox.cc/plan.listCreator?creatorId=${creatorId}`,
+			)
 		).body,
 		'plans',
 	);
@@ -146,8 +154,10 @@ async function searchBy(
 	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const definedTags =
 		unwrap<NonNullable<Tags['body']>>(
-			DownloadManage.utils.httpGetAs<{ body?: unknown }>(
-				`https://api.fanbox.cc/tag.getFeatured?creatorId=${creatorId}`,
+			(
+				await httpGetWithRetry<{ body?: unknown }>(
+					`https://api.fanbox.cc/tag.getFeatured?creatorId=${creatorId}`,
+				)
 			).body,
 			'featuredTags',
 		)?.map((tag) => tag.tag) ?? [];
@@ -175,8 +185,10 @@ async function getItemsById(downloadManage: DownloadManage) {
 	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const urls =
 		unwrap<string[]>(
-			DownloadManage.utils.httpGetAs<{ body?: unknown }>(
-				`https://api.fanbox.cc/post.paginateCreator?creatorId=${downloadManage.userId}`,
+			(
+				await httpGetWithRetry<{ body?: unknown }>(
+					`https://api.fanbox.cc/post.paginateCreator?creatorId=${downloadManage.userId}`,
+				)
 			).body,
 			'pageUrls',
 		) ?? [];
@@ -195,8 +207,7 @@ async function getItemsById(downloadManage: DownloadManage) {
 async function addByPostListUrl(downloadManage: DownloadManage, url: string): Promise<void> {
 	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const postList =
-		unwrap<PostInfo[]>(DownloadManage.utils.httpGetAs<{ body?: unknown }>(url).body, 'posts') ??
-		[];
+		unwrap<PostInfo[]>((await httpGetWithRetry<{ body?: unknown }>(url)).body, 'posts') ?? [];
 	console.log(`投稿の数:${postList.length}`);
 	for (const post of postList) {
 		if (downloadManage.isLimitValid()) {
@@ -216,12 +227,40 @@ async function addByPostListUrl(downloadManage: DownloadManage, url: string): Pr
  */
 async function getPostInfoById(postId: string): Promise<PostInfo | undefined> {
 	await DownloadManage.utils.sleep(API_DELAY_MS);
-	const body = DownloadManage.utils.httpGetAs<{ body?: PostInfo | { post?: PostInfo } }>(
-		`https://api.fanbox.cc/post.info?postId=${postId}`,
+	const body = (
+		await httpGetWithRetry<{ body?: PostInfo | { post?: PostInfo } }>(
+			`https://api.fanbox.cc/post.info?postId=${postId}`,
+		)
 	).body;
 	// 新形式: body.post / 旧形式: body そのもの
 	if (body && 'post' in body && body.post) return body.post;
 	return body as PostInfo | undefined;
+}
+
+/**
+ * HTTP GET（429の場合は待機してリトライする）
+ * @param url リクエストURL
+ */
+async function httpGetWithRetry<T>(url: string): Promise<T> {
+	for (let retry = 0; ; retry++) {
+		const request = new XMLHttpRequest();
+		request.open('GET', url, false);
+		request.withCredentials = true;
+		request.send(null);
+		if (request.status !== 429) return JSON.parse(request.responseText) as T;
+		if (retry >= RETRY_MAX) {
+			const message = `レート制限(429)が解消されないため中断しました(${url})`;
+			console.error(message);
+			alert(message);
+			throw new Error(message);
+		}
+		const retryAfter = Number.parseInt(request.getResponseHeader('Retry-After') ?? '');
+		const wait = retryAfter > 0 ? retryAfter * 1000 : RETRY_BASE_DELAY_MS * 2 ** retry;
+		console.warn(
+			`レート制限(429)のため${wait / 1000}秒待機してリトライします (${retry + 1}/${RETRY_MAX})`,
+		);
+		await DownloadManage.utils.sleep(wait);
+	}
 }
 
 /**
