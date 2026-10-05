@@ -132,18 +132,25 @@ async function searchBy(
 		return;
 	}
 	await DownloadManage.utils.sleep(API_DELAY_MS);
-	const plans = DownloadManage.utils.httpGetAs<Plans>(
-		`https://api.fanbox.cc/plan.listCreator?creatorId=${creatorId}`,
-	).body;
+	// 2026/10頃のAPI変更で body が { plans: [...] } 形式になったため両対応
+	const plans = unwrap<NonNullable<Plans['body']>>(
+		DownloadManage.utils.httpGetAs<{ body?: unknown }>(
+			`https://api.fanbox.cc/plan.listCreator?creatorId=${creatorId}`,
+		).body,
+		'plans',
+	);
 	const feeMapper = new Map<number, string>();
 	plans?.forEach((plan) => feeMapper.set(plan.fee, plan.title));
 	const downloadSettings = new DownloadManage(creatorId, feeMapper);
 	downloadSettings.downloadObject.setUrl(`https://www.fanbox.cc/@${creatorId}`);
 	await DownloadManage.utils.sleep(API_DELAY_MS);
 	const definedTags =
-		DownloadManage.utils
-			.httpGetAs<Tags>(`https://api.fanbox.cc/tag.getFeatured?creatorId=${creatorId}`)
-			.body?.map((tag) => tag.tag) ?? [];
+		unwrap<NonNullable<Tags['body']>>(
+			DownloadManage.utils.httpGetAs<{ body?: unknown }>(
+				`https://api.fanbox.cc/tag.getFeatured?creatorId=${creatorId}`,
+			).body,
+			'featuredTags',
+		)?.map((tag) => tag.tag) ?? [];
 	downloadSettings.addTags(...definedTags);
 	if (postId) addByPostInfo(downloadSettings, await getPostInfoById(postId));
 	else await getItemsById(downloadSettings);
@@ -166,9 +173,13 @@ async function getItemsById(downloadManage: DownloadManage) {
 		}
 	}
 	await DownloadManage.utils.sleep(API_DELAY_MS);
-	const urls = DownloadManage.utils.httpGetAs<{ body: string[] }>(
-		`https://api.fanbox.cc/post.paginateCreator?creatorId=${downloadManage.userId}`,
-	).body;
+	const urls =
+		unwrap<string[]>(
+			DownloadManage.utils.httpGetAs<{ body?: unknown }>(
+				`https://api.fanbox.cc/post.paginateCreator?creatorId=${downloadManage.userId}`,
+			).body,
+			'pageUrls',
+		) ?? [];
 	for (let i = 0; i < urls.length; i++) {
 		console.log(`${i + 1}回目`);
 		await addByPostListUrl(downloadManage, urls[i]);
@@ -183,7 +194,9 @@ async function getItemsById(downloadManage: DownloadManage) {
  */
 async function addByPostListUrl(downloadManage: DownloadManage, url: string): Promise<void> {
 	await DownloadManage.utils.sleep(API_DELAY_MS);
-	const postList = DownloadManage.utils.httpGetAs<{ body: PostInfo[] }>(url).body;
+	const postList =
+		unwrap<PostInfo[]>(DownloadManage.utils.httpGetAs<{ body?: unknown }>(url).body, 'posts') ??
+		[];
 	console.log(`投稿の数:${postList.length}`);
 	for (const post of postList) {
 		if (downloadManage.isLimitValid()) {
@@ -203,9 +216,27 @@ async function addByPostListUrl(downloadManage: DownloadManage, url: string): Pr
  */
 async function getPostInfoById(postId: string): Promise<PostInfo | undefined> {
 	await DownloadManage.utils.sleep(API_DELAY_MS);
-	return DownloadManage.utils.httpGetAs<{ body?: PostInfo }>(
+	const body = DownloadManage.utils.httpGetAs<{ body?: PostInfo | { post?: PostInfo } }>(
 		`https://api.fanbox.cc/post.info?postId=${postId}`,
 	).body;
+	// 新形式: body.post / 旧形式: body そのもの
+	if (body && 'post' in body && body.post) return body.post;
+	return body as PostInfo | undefined;
+}
+
+/**
+ * APIレスポンスの body を取り出す（旧形式: 配列直下 / 新形式: { [key]: 配列 } の両対応）
+ * @param body レスポンスの body
+ * @param key 新形式でのプロパティ名
+ */
+function unwrap<T>(body: unknown, key: string): T | undefined {
+	if (body == null) return undefined;
+	if (Array.isArray(body)) return body as T;
+	if (typeof body === 'object' && key in body) {
+		return (body as Record<string, unknown>)[key] as T;
+	}
+	console.error(`想定外のレスポンス形式です(key: ${key})`, body);
+	return undefined;
 }
 
 /**
